@@ -3,7 +3,6 @@ package jenkins.plugins.slack;
 import hudson.Util;
 import hudson.model.AbstractBuild;
 import hudson.model.AbstractProject;
-import hudson.model.BuildListener;
 import hudson.model.Cause;
 import hudson.model.CauseAction;
 import hudson.model.Result;
@@ -38,28 +37,18 @@ import static java.util.logging.Level.INFO;
 import static java.util.logging.Level.SEVERE;
 
 @SuppressWarnings("rawtypes")
-public class ActiveNotifier implements FineGrainedNotifier {
+public class ActiveNotifier implements NotificationProducer<AbstractBuild<?, ?>, Notification> {
 
     private static final Logger logger = Logger.getLogger(SlackNotifier.class.getName());
 
-    SlackNotifier notifier;
-    BuildListener listener;
+    private final SlackNotifier notifier;
 
-    public ActiveNotifier(SlackNotifier notifier, BuildListener listener) {
-        super();
+    public ActiveNotifier(SlackNotifier notifier) {
         this.notifier = notifier;
-        this.listener = listener;
     }
 
-    private SlackService getSlack(AbstractBuild r) {
-        return notifier.newSlackService(r, listener);
-    }
-
-    public void deleted(AbstractBuild r) {
-    }
-
-    public void started(AbstractBuild build) {
-
+    @Override
+    public Notification startBuild(AbstractBuild<?, ?> build) {
         CauseAction causeAction = build.getAction(CauseAction.class);
 
         if (causeAction != null) {
@@ -69,41 +58,42 @@ public class ActiveNotifier implements FineGrainedNotifier {
                 message.append(causeAction.getCauses().get(0).getShortDescription());
                 message.appendOpenLink();
                 if (notifier.getIncludeCustomMessage()) {
-                  message.appendCustomMessage(build.getResult());
+                    message.appendCustomMessage(build.getResult());
                 }
-                notifyStart(build, message.toString());
+                return notifyStart(build, message.toString());
                 // Cause was found, exit early to prevent double-message
-                return;
             }
         }
 
         String changes = getChanges(build, notifier.getIncludeCustomMessage());
+        Notification notification;
         if (changes != null) {
-            notifyStart(build, changes);
+            notification = notifyStart(build, changes);
         } else {
-            notifyStart(build, getBuildStatusMessage(build, false, false, notifier.getIncludeCustomMessage()));
+            notification = notifyStart(build, getBuildStatusMessage(build, false, false, notifier.getIncludeCustomMessage()));
         }
+        return notification;
     }
 
-    private void notifyStart(AbstractBuild build, String message) {
+    private Notification notifyStart(AbstractBuild build, String message) {
         AbstractProject<?, ?> project = build.getProject();
         AbstractBuild<?, ?> lastBuild = project.getLastBuild();
         if (lastBuild != null) {
             AbstractBuild<?, ?> previousBuild = lastBuild.getPreviousCompletedBuild();
             if (previousBuild == null) {
-                getSlack(build).publish(message, "good");
-            } else {
-                getSlack(build).publish(message, getBuildColor(previousBuild));
+                return Notification.good(message);
             }
-        } else {
-            getSlack(build).publish(message, "good");
+            return new Notification(message, getBuildColor(previousBuild));
         }
+        return Notification.good(message);
     }
 
-    public void finalized(AbstractBuild r) {
+    @Override
+    public Notification finalizeBuild(AbstractBuild<?, ?> r) {
         AbstractProject<?, ?> project = r.getProject();
         Result result = r.getResult();
         AbstractBuild<?, ?> previousBuild = project.getLastBuild();
+        Notification notification = null;
         if (null != previousBuild) {
             do {
                 previousBuild = previousBuild.getPreviousCompletedBuild();
@@ -114,16 +104,19 @@ public class ActiveNotifier implements FineGrainedNotifier {
                         notifier.getIncludeFailedTests(), notifier.getIncludeCustomMessage());
                 if (notifier.getCommitInfoChoice().showAnything()) {
                     message = message + "\n" + getCommitList(r);
-                }            
-                getSlack(r).publish(message, getBuildColor(r));
+                }
+                notification = new Notification(message, getBuildColor(r));
             }
         }
+        return notification;
     }
 
-    public void completed(AbstractBuild r) {
+    @Override
+    public Notification completedBuild(AbstractBuild<?, ?> r) {
         AbstractProject<?, ?> project = r.getProject();
         Result result = r.getResult();
         AbstractBuild<?, ?> previousBuild = project.getLastBuild();
+        Notification notification = null;
         if (null != previousBuild) {
             do {
                 previousBuild = previousBuild.getPreviousCompletedBuild();
@@ -131,15 +124,15 @@ public class ActiveNotifier implements FineGrainedNotifier {
             Result previousResult = (null != previousBuild) ? previousBuild.getResult() : Result.SUCCESS;
             if ((result == Result.ABORTED && notifier.getNotifyAborted())
                     || (result == Result.FAILURE //notify only on single failed build
-                        && previousResult != Result.FAILURE
-                        && notifier.getNotifyFailure())
+                    && previousResult != Result.FAILURE
+                    && notifier.getNotifyFailure())
                     || (result == Result.FAILURE //notify only on repeated failures
-                        && previousResult == Result.FAILURE
-                        && notifier.getNotifyRepeatedFailure())
+                    && previousResult == Result.FAILURE
+                    && notifier.getNotifyRepeatedFailure())
                     || (result == Result.NOT_BUILT && notifier.getNotifyNotBuilt())
                     || (result == Result.SUCCESS
-                        && (previousResult == Result.FAILURE || previousResult == Result.UNSTABLE)
-                        && notifier.getNotifyBackToNormal())
+                    && (previousResult == Result.FAILURE || previousResult == Result.UNSTABLE)
+                    && notifier.getNotifyBackToNormal())
                     || (result == Result.SUCCESS && notifier.getNotifySuccess())
                     || (result == Result.UNSTABLE && notifier.getNotifyUnstable())) {
                 String message = getBuildStatusMessage(r, notifier.getIncludeTestSummary(),
@@ -147,9 +140,10 @@ public class ActiveNotifier implements FineGrainedNotifier {
                 if (notifier.getCommitInfoChoice().showAnything()) {
                     message = message + "\n" + getCommitList(r);
                 }
-                getSlack(r).publish(message, getBuildColor(r));
+                notification = new Notification(message, getBuildColor(r));
             }
         }
+        return notification;
     }
 
     private boolean moreTestFailuresThanPreviousBuild(AbstractBuild currentBuild, AbstractBuild<?, ?> previousBuild) {

@@ -80,6 +80,14 @@ public class StandardSlackService implements SlackService {
         return publish(message, "warning");
     }
 
+    @Override
+    public boolean publish(Notification notification) {
+        if (notification != null) {
+            return publish(notification.getMessage(), notification.getColor());
+        }
+        return false;
+    }
+
     public boolean publish(String message, String color) {
         //prepare attachments first
         JSONObject field = new JSONObject();

@@ -1,14 +1,10 @@
 package jenkins.plugins.slack;
 
-import com.cloudbees.plugins.credentials.common.StandardCredentials;
 import com.cloudbees.plugins.credentials.common.StandardListBoxModel;
 import com.cloudbees.plugins.credentials.domains.HostnameRequirement;
 import hudson.EnvVars;
 import hudson.Extension;
-import hudson.ExtensionList;
 import hudson.Launcher;
-import hudson.init.InitMilestone;
-import hudson.init.Initializer;
 import hudson.Util;
 import hudson.model.AbstractBuild;
 import hudson.model.AbstractProject;
@@ -37,7 +33,6 @@ import org.kohsuke.stapler.QueryParameter;
 import org.kohsuke.stapler.StaplerRequest;
 import org.kohsuke.stapler.export.Exported;
 
-import java.io.IOException;
 import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -444,10 +439,14 @@ public class SlackNotifier extends Notifier {
     @Override
     public boolean perform(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener) {
         logger.info("Performing complete notifications");
-        new ActiveNotifier(this, listener).completed(build);
+        SlackService slack = newSlackService(build, listener);
+        ActiveNotifier notifier = new ActiveNotifier(this);
+        Notification n = notifier.completedBuild(build);
+        slack.publish(n);
         if (notifyRegression) {
             logger.info("Performing finalize notifications");
-            new ActiveNotifier(this, listener).finalized(build);
+            Notification notification = notifier.finalizeBuild(build);
+            slack.publish(notification);
         }
         return true;
     }
@@ -456,7 +455,8 @@ public class SlackNotifier extends Notifier {
     public boolean prebuild(AbstractBuild<?, ?> build, BuildListener listener) {
         if (startNotification) {
             logger.info("Performing start notifications");
-            new ActiveNotifier(this, listener).started(build);
+            Notification notification = new ActiveNotifier(this).startBuild(build);
+            newSlackService(build, listener).publish(notification);
         }
         return super.prebuild(build, listener);
     }
