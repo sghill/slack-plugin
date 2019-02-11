@@ -4,25 +4,16 @@ import hudson.Util;
 import hudson.model.AbstractBuild;
 import hudson.model.AbstractProject;
 import hudson.model.Cause;
-import hudson.model.CauseAction;
 import hudson.model.Result;
-import hudson.model.Run;
 import hudson.scm.ChangeLogSet;
 import hudson.scm.ChangeLogSet.AffectedFile;
 import hudson.scm.ChangeLogSet.Entry;
 import hudson.tasks.junit.TestResultAction;
-import hudson.tasks.test.AbstractTestResultAction;
 import hudson.tasks.test.TestResult;
-import hudson.triggers.SCMTrigger;
-import hudson.util.LogTaskListener;
 import jenkins.model.Jenkins;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.lang.StringUtils;
-import org.jenkinsci.plugins.displayurlapi.DisplayURLProvider;
-import org.jenkinsci.plugins.tokenmacro.MacroEvaluationException;
-import org.jenkinsci.plugins.tokenmacro.TokenMacro;
 
-import java.io.IOException;
 import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -32,9 +23,6 @@ import java.util.Set;
 import java.util.logging.Logger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-
-import static java.util.logging.Level.INFO;
-import static java.util.logging.Level.SEVERE;
 
 @SuppressWarnings("rawtypes")
 public class ActiveNotifier implements NotificationProducer<AbstractBuild<?, ?>, Notification> {
@@ -49,47 +37,42 @@ public class ActiveNotifier implements NotificationProducer<AbstractBuild<?, ?>,
 
     @Override
     public Notification startBuild(AbstractBuild<?, ?> build) {
-        CauseAction causeAction = build.getAction(CauseAction.class);
+        Build shim = BuildShim.create(build);
 
-        if (causeAction != null) {
-            Cause scmCause = causeAction.findCause(SCMTrigger.SCMTriggerCause.class);
-            if (scmCause == null) {
-                MessageBuilder message = new MessageBuilder(notifier, build);
-                message.append(causeAction.getCauses().get(0).getShortDescription());
-                message.appendOpenLink();
-                if (notifier.getIncludeCustomMessage()) {
-                    message.appendCustomMessage(build.getResult());
-                }
-                return notifyStart(build, message.toString());
-                // Cause was found, exit early to prevent double-message
+        if (shim.hasNonScmTriggerCauseAction()) {
+            MessageBuilder message = new MessageBuilder(notifier, shim);
+            message.append(shim.causeShortDescription());
+            message.appendOpenLink();
+            if (notifier.getIncludeCustomMessage()) {
+                message.appendCustomMessage(shim.result());
             }
+            return notifyStart(shim, message.toString());
+            // Cause was found, exit early to prevent double-message
         }
 
-        String changes = getChanges(build, notifier.getIncludeCustomMessage());
+        String changes = getChanges(shim, notifier.getIncludeCustomMessage());
         Notification notification;
         if (changes != null) {
-            notification = notifyStart(build, changes);
+            notification = notifyStart(shim, changes);
         } else {
-            notification = notifyStart(build, getBuildStatusMessage(build, false, false, notifier.getIncludeCustomMessage()));
+            notification = notifyStart(shim, getBuildStatusMessage(shim, false, false, notifier.getIncludeCustomMessage()));
         }
         return notification;
     }
 
-    private Notification notifyStart(AbstractBuild build, String message) {
-        AbstractProject<?, ?> project = build.getProject();
-        AbstractBuild<?, ?> lastBuild = project.getLastBuild();
-        if (lastBuild != null) {
-            AbstractBuild<?, ?> previousBuild = lastBuild.getPreviousCompletedBuild();
-            if (previousBuild == null) {
+    private Notification notifyStart(Build build, String message) {
+        if (build.projectHasAtLeastOneCompletedBuild()) {
+            if (build.projectHasOnlyOneCompletedBuild()) {
                 return Notification.good(message);
             }
-            return new Notification(message, getBuildColor(previousBuild));
+            return new Notification(message, getBuildColor(build));
         }
         return Notification.good(message);
     }
 
     @Override
     public Notification finalizeBuild(AbstractBuild<?, ?> r) {
+        Build shim = BuildShim.create(r);
         AbstractProject<?, ?> project = r.getProject();
         Result result = r.getResult();
         AbstractBuild<?, ?> previousBuild = project.getLastBuild();
@@ -100,12 +83,12 @@ public class ActiveNotifier implements NotificationProducer<AbstractBuild<?, ?>,
             } while (previousBuild != null && previousBuild.getResult() == Result.ABORTED);
             Result previousResult = (previousBuild != null) ? previousBuild.getResult() : Result.SUCCESS;
             if(null != previousResult && (result != null && result.isWorseThan(previousResult) || moreTestFailuresThanPreviousBuild(r, previousBuild)) && notifier.getNotifyRegression()) {
-                String message = getBuildStatusMessage(r, notifier.getIncludeTestSummary(),
+                String message = getBuildStatusMessage(shim, notifier.getIncludeTestSummary(),
                         notifier.getIncludeFailedTests(), notifier.getIncludeCustomMessage());
                 if (notifier.getCommitInfoChoice().showAnything()) {
                     message = message + "\n" + getCommitList(r);
                 }
-                notification = new Notification(message, getBuildColor(r));
+                notification = new Notification(message, getBuildColor(shim));
             }
         }
         return notification;
@@ -113,6 +96,7 @@ public class ActiveNotifier implements NotificationProducer<AbstractBuild<?, ?>,
 
     @Override
     public Notification completedBuild(AbstractBuild<?, ?> r) {
+        Build build = BuildShim.create(r);
         AbstractProject<?, ?> project = r.getProject();
         Result result = r.getResult();
         AbstractBuild<?, ?> previousBuild = project.getLastBuild();
@@ -135,12 +119,12 @@ public class ActiveNotifier implements NotificationProducer<AbstractBuild<?, ?>,
                     && notifier.getNotifyBackToNormal())
                     || (result == Result.SUCCESS && notifier.getNotifySuccess())
                     || (result == Result.UNSTABLE && notifier.getNotifyUnstable())) {
-                String message = getBuildStatusMessage(r, notifier.getIncludeTestSummary(),
+                String message = getBuildStatusMessage(build, notifier.getIncludeTestSummary(),
                         notifier.getIncludeFailedTests(), notifier.getIncludeCustomMessage());
                 if (notifier.getCommitInfoChoice().showAnything()) {
                     message = message + "\n" + getCommitList(r);
                 }
-                notification = new Notification(message, getBuildColor(r));
+                notification = new Notification(message, getBuildColor(build));
             }
         }
         return notification;
@@ -171,39 +155,25 @@ public class ActiveNotifier implements NotificationProducer<AbstractBuild<?, ?>,
         return failedTestIds;
     }
 
-    String getChanges(AbstractBuild r, boolean includeCustomMessage) {
-        if (!r.hasChangeSetComputed()) {
+    String getChanges(Build build, boolean includeCustomMessage) {
+        if (build.doesNotHaveChangeSetComputed()) {
             logger.info("No change set computed...");
             return null;
         }
-        ChangeLogSet changeSet = r.getChangeSet();
-        List<Entry> entries = new LinkedList<>();
-        Set<AffectedFile> files = new HashSet<>();
-        for (Object o : changeSet.getItems()) {
-            Entry entry = (Entry) o;
-            logger.info("Entry " + o);
-            entries.add(entry);
-            if (CollectionUtils.isNotEmpty(entry.getAffectedFiles())) {
-                files.addAll(entry.getAffectedFiles());
-            }
-        }
-        if (entries.isEmpty()) {
+        if (build.doesNotHaveChangeSetEntries()) {
             logger.info("Empty change...");
             return null;
         }
-        Set<String> authors = new HashSet<>();
-        for (Entry entry : entries) {
-            authors.add(entry.getAuthor().getDisplayName());
-        }
-        MessageBuilder message = new MessageBuilder(notifier, r);
+        Set<String> authors = build.changeSetAuthors();
+        MessageBuilder message = new MessageBuilder(notifier, build);
         message.append("Started by changes from ");
         message.append(StringUtils.join(authors, ", "));
         message.append(" (");
-        message.append(files.size());
+        message.append(build.totalAffectedFilesInChangeSet());
         message.append(" file(s) changed)");
         message.appendOpenLink();
         if (includeCustomMessage) {
-            message.appendCustomMessage(r.getResult());
+            message.appendCustomMessage(build.result());
         }
         return message.toString();
     }
@@ -242,25 +212,24 @@ public class ActiveNotifier implements NotificationProducer<AbstractBuild<?, ?>,
             }
             commits.add(commit.toString());
         }
-        MessageBuilder message = new MessageBuilder(notifier, r);
+        MessageBuilder message = new MessageBuilder(notifier, BuildShim.create(r));
         message.append("Changes:\n- ");
         message.append(StringUtils.join(commits, "\n- "));
         return message.toString();
     }
 
-    static String getBuildColor(AbstractBuild r) {
-        Result result = r.getResult();
-        if (result == Result.SUCCESS) {
+    static String getBuildColor(Build build) {
+        if (build.result() == Result.SUCCESS) {
             return "good";
-        } else if (result == Result.FAILURE) {
+        } else if (build.result() == Result.FAILURE) {
             return "danger";
         } else {
             return "warning";
         }
     }
 
-    String getBuildStatusMessage(AbstractBuild r, boolean includeTestSummary, boolean includeFailedTests, boolean includeCustomMessage) {
-        MessageBuilder message = new MessageBuilder(notifier, r);
+    String getBuildStatusMessage(Build build, boolean includeTestSummary, boolean includeFailedTests, boolean includeCustomMessage) {
+        MessageBuilder message = new MessageBuilder(notifier, build);
         message.appendStatusMessage();
         message.appendDuration();
         message.appendOpenLink();
@@ -271,7 +240,7 @@ public class ActiveNotifier implements NotificationProducer<AbstractBuild<?, ?>,
             message.appendFailedTests();
         }
         if (includeCustomMessage) {
-            message.appendCustomMessage(r.getResult());
+            message.appendCustomMessage(build.result());
         }
         return message.toString();
     }
@@ -292,9 +261,9 @@ public class ActiveNotifier implements NotificationProducer<AbstractBuild<?, ?>,
 
         private StringBuilder message;
         private SlackNotifier notifier;
-        private AbstractBuild build;
+        private final Build build;
 
-        public MessageBuilder(SlackNotifier notifier, AbstractBuild build) {
+        public MessageBuilder(SlackNotifier notifier, Build build) {
             this.notifier = notifier;
             this.message = new StringBuilder();
             this.build = build;
@@ -302,69 +271,46 @@ public class ActiveNotifier implements NotificationProducer<AbstractBuild<?, ?>,
         }
 
         public MessageBuilder appendStatusMessage() {
-            message.append(this.escape(getStatusMessage(build)));
+            message.append(this.escape(getStatusMessage()));
             return this;
         }
 
-        private String getStatusMessage(AbstractBuild r) {
-            Result result = r.getResult();
+        private String getStatusMessage() {
             Result previousResult;
-            if(null != result) {
-                AbstractBuild lastBuild = r.getProject().getLastBuild();
-                if (lastBuild != null) {
-                    Run previousBuild = lastBuild.getPreviousBuild();
-                    Run previousSuccessfulBuild = r.getPreviousSuccessfulBuild();
-                    boolean buildHasSucceededBefore = previousSuccessfulBuild != null;
-
-                    /*
-                     * If the last build was aborted, go back to find the last non-aborted build.
-                     * This is so that aborted builds do not affect build transitions.
-                     * I.e. if build 1 was failure, build 2 was aborted and build 3 was a success the transition
-                     * should be failure -> success (and therefore back to normal) not aborted -> success.
-                     */
-                    Run lastNonAbortedBuild = previousBuild;
-                    while (lastNonAbortedBuild != null && lastNonAbortedBuild.getResult() == Result.ABORTED) {
-                        lastNonAbortedBuild = lastNonAbortedBuild.getPreviousBuild();
-                    }
+            if(build.hasResult()) {
+                if (build.projectHasAtLeastOneCompletedBuild()) {
 
 
-                    /* If all previous builds have been aborted, then use
-                     * SUCCESS as a default status so an aborted message is sent
-                     */
-                    if (lastNonAbortedBuild == null) {
-                        previousResult = Result.SUCCESS;
-                    } else {
-                        previousResult = lastNonAbortedBuild.getResult();
-                    }
+                    previousResult = build.previousNonAbortedResult();
 
                     /* Back to normal should only be shown if the build has actually succeeded at some point.
                      * Also, if a build was previously unstable and has now succeeded the status should be
                      * "Back to normal"
                      */
-                    if (result == Result.SUCCESS
+                    if (build.result() == Result.SUCCESS
                             && (previousResult == Result.FAILURE || previousResult == Result.UNSTABLE)
-                            && buildHasSucceededBefore && notifier.getNotifyBackToNormal()) {
+                            && build.hasPreviousSuccess() && notifier.getNotifyBackToNormal()) {
                         return BACK_TO_NORMAL_STATUS_MESSAGE;
                     }
-                    if (result == Result.FAILURE && previousResult == Result.FAILURE) {
+                    if (build.result() == Result.FAILURE && previousResult == Result.FAILURE) {
                         return STILL_FAILING_STATUS_MESSAGE;
                     }
-                    if (result == Result.SUCCESS) {
+                    if (build.result() == Result.SUCCESS) {
                         return SUCCESS_STATUS_MESSAGE;
                     }
-                    if (result == Result.FAILURE) {
+                    if (build.result() == Result.FAILURE) {
                         return FAILURE_STATUS_MESSAGE;
                     }
-                    if (result == Result.ABORTED) {
+                    if (build.result() == Result.ABORTED) {
                         return ABORTED_STATUS_MESSAGE;
                     }
-                    if (result == Result.NOT_BUILT) {
+                    if (build.result() == Result.NOT_BUILT) {
                         return NOT_BUILT_STATUS_MESSAGE;
                     }
-                    if (result == Result.UNSTABLE) {
+                    if (build.result() == Result.UNSTABLE) {
                         return UNSTABLE_STATUS_MESSAGE;
                     }
-                    if (lastNonAbortedBuild != null && previousResult != null && result.isWorseThan(previousResult)) {
+                    if (build.projectHasAtLeastOneNonAbortedBuild() && previousResult != null && build.result().isWorseThan(previousResult)) {
                         return REGRESSION_STATUS_MESSAGE;
                     }
                 }
@@ -383,15 +329,15 @@ public class ActiveNotifier implements NotificationProducer<AbstractBuild<?, ?>,
         }
 
         private MessageBuilder startMessage() {
-            message.append(this.escape(build.getProject().getFullDisplayName()));
+            message.append(this.escape(build.projectDisplayName()));
             message.append(" - ");
-            message.append(this.escape(build.getDisplayName()));
+            message.append(this.escape(build.displayName()));
             message.append(" ");
             return this;
         }
 
         public MessageBuilder appendOpenLink() {
-            String url = DisplayURLProvider.get().getRunURL(build);
+            String url = build.url();
             message.append(" (<").append(url).append("|Open>)");
             return this;
         }
@@ -402,24 +348,19 @@ public class ActiveNotifier implements NotificationProducer<AbstractBuild<?, ?>,
             if(message.toString().contains(BACK_TO_NORMAL_STATUS_MESSAGE)){
                 durationString = createBackToNormalDurationString();
             } else {
-                durationString = build.getDurationString();
+                durationString = build.humanDuration();
             }
             message.append(durationString);
             return this;
         }
 
         public MessageBuilder appendTestSummary() {
-            AbstractTestResultAction<?> action = this.build
-                    .getAction(AbstractTestResultAction.class);
-            if (action != null) {
-                int total = action.getTotalCount();
-                int failed = action.getFailCount();
-                int skipped = action.getSkipCount();
+            if (build.hasTestResults()) {
+                TestResults testResults = build.testResults();
                 message.append("\nTest Status:\n");
-                message.append("\tPassed: ")
-                        .append(total - failed - skipped);
-                message.append(", Failed: ").append(failed);
-                message.append(", Skipped: ").append(skipped);
+                message.append("\tPassed: ").append(testResults.getPassed());
+                message.append(", Failed: ").append(testResults.getFailed());
+                message.append(", Skipped: ").append(testResults.getSkipped());
             } else {
                 message.append("\nNo Tests found.");
             }
@@ -427,14 +368,13 @@ public class ActiveNotifier implements NotificationProducer<AbstractBuild<?, ?>,
         }
 
         public MessageBuilder appendFailedTests() {
-            AbstractTestResultAction<?> action = this.build
-                    .getAction(AbstractTestResultAction.class);
-            if (action != null) {
-                int failed = action.getFailCount();
+            if (build.hasTestResults()) {
+                TestResults results = build.testResults();
+                int failed = results.getFailed();
                 message.append("\n").append(failed).append(" Failed Tests:\n");
-                for(TestResult result : action.getFailedTests()) {
+                for(TestResults.Result result : results.getFailedTests()) {
                     message.append("\t").append(getTestClassAndMethod(result)).append(" after ")
-                            .append(result.getDurationString()).append("\n");
+                            .append(result.getHumanDuration()).append("\n");
                 }
             }
             return this;
@@ -458,18 +398,13 @@ public class ActiveNotifier implements NotificationProducer<AbstractBuild<?, ?>,
             if (customMessage == null || customMessage.isEmpty()) {
                 customMessage = notifier.getCustomMessage();
             }
-            try {
-                String replaced = TokenMacro.expandAll(build, new LogTaskListener(logger, INFO), customMessage, false, null);
-                message.append("\n");
-                message.append(replaced);
-            } catch (MacroEvaluationException | IOException | InterruptedException e) {
-                logger.log(SEVERE, e.getMessage(), e);
-            }
+            message.append("\n");
+            message.append(build.expandTokensFor(customMessage));
             return this;
         }
 
-        private String getTestClassAndMethod(TestResult result) {
-            String fullDisplayName = result.getFullDisplayName();
+        private String getTestClassAndMethod(TestResults.Result result) {
+            String fullDisplayName = result.getDisplayName();
 
             if (StringUtils.countMatches(fullDisplayName, ".") > 1) {
                 int methodDotIndex = fullDisplayName.lastIndexOf('.');
@@ -485,17 +420,11 @@ public class ActiveNotifier implements NotificationProducer<AbstractBuild<?, ?>,
         private String createBackToNormalDurationString(){
             // This status code guarantees that the previous build fails and has been successful before
             // The back to normal time is the time since the build first broke
-            Run previousSuccessfulBuild = build.getPreviousSuccessfulBuild();
-            if (null != previousSuccessfulBuild && null != previousSuccessfulBuild.getNextBuild()) {
-                Run initialFailureAfterPreviousSuccessfulBuild = previousSuccessfulBuild.getNextBuild();
-                if (initialFailureAfterPreviousSuccessfulBuild != null) {
-                    long initialFailureStartTime = initialFailureAfterPreviousSuccessfulBuild.getStartTimeInMillis();
-                    long initialFailureDuration = initialFailureAfterPreviousSuccessfulBuild.getDuration();
-                    long initialFailureEndTime = initialFailureStartTime + initialFailureDuration;
-                    long buildStartTime = build.getStartTimeInMillis();
-                    long buildDuration = build.getDuration();
-                    long buildEndTime = buildStartTime + buildDuration;
-                    long backToNormalDuration = buildEndTime - initialFailureEndTime;
+            boolean hasPreviousSuccessfulBuild = build.hasPreviousSuccess();
+            boolean mostRecentSuccessfulBuildHadNextBuild = hasPreviousSuccessfulBuild && build.hasCompletedBuildSincePreviousSuccess();
+            if (mostRecentSuccessfulBuildHadNextBuild) {
+                if (build.hasFailedSincePreviousSuccess()) {
+                    long backToNormalDuration = build.endTimeInMillis() - build.endTimeOfInitialFailureInMillis();
                     return Util.getTimeSpanString(backToNormalDuration);
                 }
             }

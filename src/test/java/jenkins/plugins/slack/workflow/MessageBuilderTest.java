@@ -4,6 +4,7 @@ import hudson.model.FreeStyleBuild;
 import hudson.model.FreeStyleProject;
 import hudson.model.ItemGroup;
 import jenkins.plugins.slack.ActiveNotifier;
+import jenkins.plugins.slack.BuildShim;
 import junit.framework.TestCase;
 import org.junit.Before;
 import org.junit.Test;
@@ -25,7 +26,7 @@ public class MessageBuilderTest extends TestCase {
     @Before
     @Override
     public void setUp() {
-        messageBuilder = new ActiveNotifier.MessageBuilder(null, build);
+        messageBuilder = new ActiveNotifier.MessageBuilder(null, BuildShim.create(build));
     }
 
     public MessageBuilderTest(String projectDisplayName, String buildDisplayName, String expectedResult) {

@@ -34,7 +34,7 @@ public class MessageBuilderEscapeTest {
         when(job.getFullDisplayName()).thenReturn("job");
         when(project.getFullDisplayName()).thenReturn("project");
 
-        messageBuilder = new ActiveNotifier.MessageBuilder(notifier, build);
+        messageBuilder = new ActiveNotifier.MessageBuilder(notifier, BuildShim.create(build));
     }
 
     @Test
