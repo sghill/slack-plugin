@@ -62,17 +62,22 @@ public class ActiveNotifier implements NotificationProducer<Build, Notification>
         Notification notification = null;
         if (build.hasAtLeastOnePreviousNonAbortedAndCompletedBuild()) {
             Result previousResult = build.previousNonAbortedResult();
-            boolean alwaysTrue = null != previousResult;
             boolean currentBuildHasResult = build.hasResult();
-            if(alwaysTrue && (currentBuildHasResult && result.isWorseThan(previousResult) || moreTestFailuresThanPreviousBuild(build, previous)) && notifier.getNotifyRegression()) {
-                String message = getBuildStatusMessage(build, notifier.getIncludeTestSummary(),
-                        notifier.getIncludeFailedTests(), notifier.getIncludeCustomMessage());
-                if (notifier.getCommitInfoChoice().showAnything()) {
-                    message = message + "\n" + getCommitList(build);
-                }
-                notification = new Notification(message, getResultColor(build.result()));
+            if((currentBuildHasResult && result.isWorseThan(previousResult) || moreTestFailuresThanPreviousBuild(build, previous)) && notifier.getNotifyRegression()) {
+                notification = getNotification(build);
             }
         }
+        return notification;
+    }
+
+    private Notification getNotification(Build build) {
+        Notification notification;
+        String message = getBuildStatusMessage(build, notifier.getIncludeTestSummary(),
+                notifier.getIncludeFailedTests(), notifier.getIncludeCustomMessage());
+        if (notifier.getCommitInfoChoice().showAnything()) {
+            message = message + "\n" + getCommitList(build);
+        }
+        notification = new Notification(message, getResultColor(build.result()));
         return notification;
     }
 
@@ -95,12 +100,7 @@ public class ActiveNotifier implements NotificationProducer<Build, Notification>
                     && notifier.getNotifyBackToNormal())
                     || (result == Result.SUCCESS && notifier.getNotifySuccess())
                     || (result == Result.UNSTABLE && notifier.getNotifyUnstable())) {
-                String message = getBuildStatusMessage(build, notifier.getIncludeTestSummary(),
-                        notifier.getIncludeFailedTests(), notifier.getIncludeCustomMessage());
-                if (notifier.getCommitInfoChoice().showAnything()) {
-                    message = message + "\n" + getCommitList(build);
-                }
-                notification = new Notification(message, getResultColor(build.result()));
+                notification = getNotification(build);
             }
         }
         return notification;
