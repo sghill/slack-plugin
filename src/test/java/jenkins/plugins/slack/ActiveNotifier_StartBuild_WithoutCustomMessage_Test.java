@@ -1,28 +1,32 @@
 package jenkins.plugins.slack;
 
+import com.google.common.collect.Sets;
 import hudson.model.Result;
-import org.junit.Ignore;
 import org.junit.Test;
 
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
 import static org.junit.Assert.assertEquals;
 
-public class ActiveNotifierStartBuildTest {
+public class ActiveNotifier_StartBuild_WithoutCustomMessage_Test {
+    private SlackNotifier preferences = SlackNotifierBuilder.builder()
+            .doesNotIncludeCustomMessage()
+            .build();
+    private TestBuildBuilder builder = TestBuildBuilder.builder()
+            .withoutResult(); // build will not have a result on start
 
     @Test
-    public void shouldCreateNotificationWithoutScmTriggerCauseOrCustomMessage() {
+    public void shouldCreateNotificationWithoutScmTriggerCause() {
         // given
-        Build build = TestBuildBuilder.builder()
+        Build build = builder
                 .withoutScmTriggerCauseAction()
-                .projectDisplayName("something")
-                .displayName("else")
-                .causeShortDescription("this one thing")
-                .url("http://localhost/some/build")
-                .build();
-        SlackNotifier preferences = SlackNotifierBuilder.builder()
-                .doesNotIncludeCustomMessage()
+                .withProjectDisplayName("something")
+                .withDisplayName("else")
+                .withCauseShortDescription("this one thing")
+                .withUrl("http://localhost/some/build")
                 .build();
         ActiveNotifier notifier = new ActiveNotifier(preferences);
         Notification expected = Notification.good("something - else this one thing (<http://localhost/some/build|Open>)");
@@ -35,23 +39,67 @@ public class ActiveNotifierStartBuildTest {
     }
 
     @Test
-    @Ignore // custom messages are going to require us to split out the token processor from the build interface
-    public void shouldCreateNotificationWithoutScmTriggerCauseWithCustomMessage() {
+    public void shouldCreateNotificationWithScmTriggerCause_withoutChangeSetComputed() {
         // given
-        Build build = TestBuildBuilder.builder()
-                .withoutScmTriggerCauseAction()
-                .projectDisplayName("something")
-                .displayName("else")
-                .causeShortDescription("this one thing")
-                .url("http://localhost/some/build")
-                .result(Result.SUCCESS)
-                .build();
-        SlackNotifier preferences = SlackNotifierBuilder.builder()
-                .includeCustomMessage()
-                .customMessage("hello there folks")
+        Build build = builder
+                .withScmTriggerCauseAction()
+                .withoutChangeSetComputed()
+                .withProjectDisplayName("Project")
+                .withDisplayName("Build 3")
+                .withCauseShortDescription("scm changes")
+                .withUrl("http://localhost/some/build/1")
+                .withHumanDuration("Not Started Yet")
                 .build();
         ActiveNotifier notifier = new ActiveNotifier(preferences);
-        Notification expected = Notification.good("something - else this one thing (<http://localhost/some/build|Open>)");
+        Notification expected = Notification.good("Project - Build 3 Unknown after Not Started Yet (<http://localhost/some/build/1|Open>)");
+
+        // when
+        Notification actual = notifier.startBuild(build);
+
+        // then
+        assertEquals(expected, actual);
+    }
+
+    @Test
+    public void shouldCreateNotificationWithScmTriggerCause_withChangeSetEntries() {
+        // given
+        Build build = builder
+                .withScmTriggerCauseAction()
+                .withChangeSetComputed()
+                .withoutChangeSetEntries()
+                .withProjectDisplayName("Project")
+                .withDisplayName("Build 4")
+                .withCauseShortDescription("scm changes")
+                .withUrl("http://localhost/some/build/4")
+                .withHumanDuration("Not Started Yet")
+                .build();
+        ActiveNotifier notifier = new ActiveNotifier(preferences);
+        Notification expected = Notification.good("Project - Build 4 Unknown after Not Started Yet (<http://localhost/some/build/4|Open>)");
+
+        // when
+        Notification actual = notifier.startBuild(build);
+
+        // then
+        assertEquals(expected, actual);
+    }
+
+    @Test
+    public void shouldCreateNotificationWithScmTriggerCause_changeSetEntries() {
+        // given
+        Build build = builder
+                .withScmTriggerCauseAction()
+                .withChangeSetComputed()
+                .withChangeSetEntries()
+                .withAuthors("Andrea T. Developer", "Old MacDonald")
+                .withTotalAffectedFilesInChangeSet(15)
+                .withProjectDisplayName("Project")
+                .withDisplayName("Build 4")
+                .withCauseShortDescription("scm changes")
+                .withUrl("http://localhost/some/build/4")
+                .withHumanDuration("Not Started Yet")
+                .build();
+        ActiveNotifier notifier = new ActiveNotifier(preferences);
+        Notification expected = Notification.good("Project - Build 4 Started by changes from Andrea T. Developer, Old MacDonald (15 file(s) changed) (<http://localhost/some/build/4|Open>)");
 
         // when
         Notification actual = notifier.startBuild(build);
@@ -145,6 +193,10 @@ public class ActiveNotifierStartBuildTest {
         private boolean scmTriggerCauseAction;
         private String causeShortDescription;
         private hudson.model.Result result;
+        private boolean changeSetComputed;
+        private boolean changeSetEntries;
+        private Set<String> authors = new HashSet<>();
+        private long affectedFiles;
 
         private TestBuildBuilder() {
         }
@@ -163,28 +215,38 @@ public class ActiveNotifierStartBuildTest {
             return this;
         }
 
-        public TestBuildBuilder projectDisplayName(String name) {
+        public TestBuildBuilder withProjectDisplayName(String name) {
             this.projectDisplayName = name;
             return this;
         }
 
-        public TestBuildBuilder displayName(String name) {
+        public TestBuildBuilder withDisplayName(String name) {
             this.displayName = name;
             return this;
         }
 
-        public TestBuildBuilder causeShortDescription(String description) {
+        public TestBuildBuilder withCauseShortDescription(String description) {
             this.causeShortDescription = description;
             return this;
         }
 
-        public TestBuildBuilder url(String url) {
+        public TestBuildBuilder withUrl(String url) {
             this.url = url;
             return this;
         }
 
         public TestBuildBuilder result(hudson.model.Result result) {
             this.result = result;
+            return this;
+        }
+
+        public TestBuildBuilder withChangeSetComputed() {
+            this.changeSetComputed = true;
+            return this;
+        }
+
+        public TestBuildBuilder withoutChangeSetComputed() {
+            this.changeSetComputed = false;
             return this;
         }
 
@@ -207,7 +269,7 @@ public class ActiveNotifierStartBuildTest {
 
                 @Override
                 public String humanDuration() {
-                    return null;
+                    return humanDuration;
                 }
 
                 @Override
@@ -292,17 +354,17 @@ public class ActiveNotifierStartBuildTest {
 
                 @Override
                 public boolean doesNotHaveChangeSetComputed() {
-                    return false;
+                    return !changeSetComputed;
                 }
 
                 @Override
                 public Set<String> changeSetAuthors() {
-                    return null;
+                    return authors;
                 }
 
                 @Override
                 public boolean doesNotHaveChangeSetEntries() {
-                    return false;
+                    return !changeSetEntries;
                 }
 
                 @Override
@@ -312,7 +374,7 @@ public class ActiveNotifierStartBuildTest {
 
                 @Override
                 public long totalAffectedFilesInChangeSet() {
-                    return 0;
+                    return affectedFiles;
                 }
 
                 @Override
@@ -335,6 +397,38 @@ public class ActiveNotifierStartBuildTest {
                     return false;
                 }
             };
+        }
+
+        public TestBuildBuilder withoutResult() {
+            this.result = null;
+            return this;
+        }
+
+        public TestBuildBuilder withHumanDuration(String duration) {
+            this.humanDuration = duration;
+            return this;
+        }
+
+        public TestBuildBuilder withoutChangeSetEntries() {
+            this.changeSetEntries = false;
+            return this;
+        }
+
+        public TestBuildBuilder withChangeSetEntries() {
+            this.changeSetEntries = true;
+            return this;
+        }
+
+        public TestBuildBuilder withAuthors(String first, String... rest) {
+            Set<String> given = Sets.newHashSet(first);
+            given.addAll(Arrays.asList(rest));
+            this.authors = given;
+            return this;
+        }
+
+        public TestBuildBuilder withTotalAffectedFilesInChangeSet(long total) {
+            this.affectedFiles = total;
+            return this;
         }
     }
 }

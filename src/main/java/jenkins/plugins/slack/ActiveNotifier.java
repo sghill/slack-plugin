@@ -27,25 +27,24 @@ public class ActiveNotifier implements NotificationProducer<Build, Notification>
 
     @Override
     public Notification startBuild(Build build) {
+        boolean includeCustomMessage = notifier.getIncludeCustomMessage();
         if (build.hasNonScmTriggerCauseAction()) {
             MessageBuilder message = new MessageBuilder(notifier, build);
             message.append(build.causeShortDescription());
             message.appendOpenLink();
-            if (notifier.getIncludeCustomMessage()) {
+            if (includeCustomMessage) {
                 message.appendCustomMessage(build.result());
             }
             return notifyStart(build, message.toString());
             // Cause was found, exit early to prevent double-message
         }
 
-        String changes = getChanges(build, notifier.getIncludeCustomMessage());
-        Notification notification;
+        String changes = getChanges(build, includeCustomMessage);
+
         if (changes != null) {
-            notification = notifyStart(build, changes);
-        } else {
-            notification = notifyStart(build, getBuildStatusMessage(build, false, false, notifier.getIncludeCustomMessage()));
+            return notifyStart(build, changes);
         }
-        return notification;
+        return notifyStart(build, getBuildStatusMessage(build, false, false, includeCustomMessage));
     }
 
     private Notification notifyStart(Build build, String message) {
