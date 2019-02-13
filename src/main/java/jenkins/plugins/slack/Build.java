@@ -14,9 +14,7 @@ public interface Build {
     boolean hasTestResults();
     TestResults testResults();
     boolean hasResult();
-    boolean projectHasAtLeastOneCompletedBuild();
-    boolean projectHasOnlyOneCompletedBuild();
-    boolean projectHasAtLeastOneNonAbortedBuild();
+    boolean hasAtLeastOnePreviousNonAbortedAndCompletedBuild();
     Result result();
     Result previousNonAbortedResult();
     String expandTokensFor(String message);

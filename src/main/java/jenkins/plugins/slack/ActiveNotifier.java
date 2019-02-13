@@ -1,14 +1,12 @@
 package jenkins.plugins.slack;
 
+import com.google.common.collect.ImmutableMap;
 import hudson.Util;
 import hudson.model.Result;
 import org.apache.commons.lang.StringUtils;
 
 import java.text.MessageFormat;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 import java.util.logging.Logger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -16,8 +14,11 @@ import java.util.stream.Collectors;
 
 @SuppressWarnings("rawtypes")
 public class ActiveNotifier implements NotificationProducer<Build, Notification> {
-
     private static final Logger logger = Logger.getLogger(SlackNotifier.class.getName());
+    private static final Map<Result, String> RESULT_COLOR = ImmutableMap.of(
+            Result.SUCCESS, "good",
+            Result.FAILURE, "danger"
+    );
 
     private final SlackNotifier notifier;
 
@@ -48,11 +49,8 @@ public class ActiveNotifier implements NotificationProducer<Build, Notification>
     }
 
     private Notification notifyStart(Build build, String message) {
-        if (build.projectHasAtLeastOneCompletedBuild()) {
-            if (build.projectHasOnlyOneCompletedBuild()) {
-                return Notification.good(message);
-            }
-            return new Notification(message, getBuildColor(build));
+        if (build.hasAtLeastOnePreviousNonAbortedAndCompletedBuild()) {
+            return new Notification(message, getResultColor(build.previousNonAbortedResult()));
         }
         return Notification.good(message);
     }
@@ -62,7 +60,7 @@ public class ActiveNotifier implements NotificationProducer<Build, Notification>
         Result result = build.result();
         Build previous = build.previous();
         Notification notification = null;
-        if (build.projectHasAtLeastOneCompletedBuild()) {
+        if (build.hasAtLeastOnePreviousNonAbortedAndCompletedBuild()) {
             Result previousResult = build.previousNonAbortedResult();
             boolean alwaysTrue = null != previousResult;
             boolean currentBuildHasResult = build.hasResult();
@@ -72,7 +70,7 @@ public class ActiveNotifier implements NotificationProducer<Build, Notification>
                 if (notifier.getCommitInfoChoice().showAnything()) {
                     message = message + "\n" + getCommitList(build);
                 }
-                notification = new Notification(message, getBuildColor(build));
+                notification = new Notification(message, getResultColor(build.result()));
             }
         }
         return notification;
@@ -82,7 +80,7 @@ public class ActiveNotifier implements NotificationProducer<Build, Notification>
     public Notification completedBuild(Build build) {
         Result result = build.result();
         Notification notification = null;
-        if (build.projectHasAtLeastOneCompletedBuild()) {
+        if (build.hasAtLeastOnePreviousNonAbortedAndCompletedBuild()) {
             Result previousResult = build.previousNonAbortedResult();
             if ((result == Result.ABORTED && notifier.getNotifyAborted())
                     || (result == Result.FAILURE //notify only on single failed build
@@ -102,7 +100,7 @@ public class ActiveNotifier implements NotificationProducer<Build, Notification>
                 if (notifier.getCommitInfoChoice().showAnything()) {
                     message = message + "\n" + getCommitList(build);
                 }
-                notification = new Notification(message, getBuildColor(build));
+                notification = new Notification(message, getResultColor(build.result()));
             }
         }
         return notification;
@@ -177,14 +175,8 @@ public class ActiveNotifier implements NotificationProducer<Build, Notification>
         return message.toString();
     }
 
-    static String getBuildColor(Build build) {
-        if (build.result() == Result.SUCCESS) {
-            return "good";
-        } else if (build.result() == Result.FAILURE) {
-            return "danger";
-        } else {
-            return "warning";
-        }
+    static String getResultColor(Result result) {
+        return RESULT_COLOR.getOrDefault(result, "warning");
     }
 
     String getBuildStatusMessage(Build build, boolean includeTestSummary, boolean includeFailedTests, boolean includeCustomMessage) {
@@ -237,7 +229,7 @@ public class ActiveNotifier implements NotificationProducer<Build, Notification>
         private String getStatusMessage() {
             Result previousResult;
             if(build.hasResult()) {
-                if (build.projectHasAtLeastOneCompletedBuild()) {
+                if (build.hasAtLeastOnePreviousNonAbortedAndCompletedBuild()) {
 
 
                     previousResult = build.previousNonAbortedResult();
@@ -269,7 +261,7 @@ public class ActiveNotifier implements NotificationProducer<Build, Notification>
                     if (build.result() == Result.UNSTABLE) {
                         return UNSTABLE_STATUS_MESSAGE;
                     }
-                    if (build.projectHasAtLeastOneNonAbortedBuild() && previousResult != null && build.result().isWorseThan(previousResult)) {
+                    if (build.hasAtLeastOnePreviousNonAbortedAndCompletedBuild() && previousResult != null && build.result().isWorseThan(previousResult)) {
                         return REGRESSION_STATUS_MESSAGE;
                     }
                 }
