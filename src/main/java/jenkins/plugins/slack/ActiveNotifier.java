@@ -1,7 +1,6 @@
 package jenkins.plugins.slack;
 
 import hudson.Util;
-import hudson.model.AbstractBuild;
 import hudson.model.Result;
 import org.apache.commons.lang.StringUtils;
 
@@ -16,7 +15,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @SuppressWarnings("rawtypes")
-public class ActiveNotifier implements NotificationProducer<AbstractBuild<?, ?>, Notification> {
+public class ActiveNotifier implements NotificationProducer<Build, Notification> {
 
     private static final Logger logger = Logger.getLogger(SlackNotifier.class.getName());
 
@@ -27,26 +26,24 @@ public class ActiveNotifier implements NotificationProducer<AbstractBuild<?, ?>,
     }
 
     @Override
-    public Notification startBuild(AbstractBuild<?, ?> build) {
-        Build shim = BuildShim.create(build);
-
-        if (shim.hasNonScmTriggerCauseAction()) {
-            MessageBuilder message = new MessageBuilder(notifier, shim);
-            message.append(shim.causeShortDescription());
+    public Notification startBuild(Build build) {
+        if (build.hasNonScmTriggerCauseAction()) {
+            MessageBuilder message = new MessageBuilder(notifier, build);
+            message.append(build.causeShortDescription());
             message.appendOpenLink();
             if (notifier.getIncludeCustomMessage()) {
-                message.appendCustomMessage(shim.result());
+                message.appendCustomMessage(build.result());
             }
-            return notifyStart(shim, message.toString());
+            return notifyStart(build, message.toString());
             // Cause was found, exit early to prevent double-message
         }
 
-        String changes = getChanges(shim, notifier.getIncludeCustomMessage());
+        String changes = getChanges(build, notifier.getIncludeCustomMessage());
         Notification notification;
         if (changes != null) {
-            notification = notifyStart(shim, changes);
+            notification = notifyStart(build, changes);
         } else {
-            notification = notifyStart(shim, getBuildStatusMessage(shim, false, false, notifier.getIncludeCustomMessage()));
+            notification = notifyStart(build, getBuildStatusMessage(build, false, false, notifier.getIncludeCustomMessage()));
         }
         return notification;
     }
@@ -62,30 +59,28 @@ public class ActiveNotifier implements NotificationProducer<AbstractBuild<?, ?>,
     }
 
     @Override
-    public Notification finalizeBuild(AbstractBuild<?, ?> r) {
-        Build shim = BuildShim.create(r);
-        Result result = shim.result();
-        Build previous = shim.previous();
+    public Notification finalizeBuild(Build build) {
+        Result result = build.result();
+        Build previous = build.previous();
         Notification notification = null;
-        if (shim.projectHasAtLeastOneCompletedBuild()) {
-            Result previousResult = shim.previousNonAbortedResult();
+        if (build.projectHasAtLeastOneCompletedBuild()) {
+            Result previousResult = build.previousNonAbortedResult();
             boolean alwaysTrue = null != previousResult;
-            boolean currentBuildHasResult = shim.hasResult();
-            if(alwaysTrue && (currentBuildHasResult && result.isWorseThan(previousResult) || moreTestFailuresThanPreviousBuild(shim, previous)) && notifier.getNotifyRegression()) {
-                String message = getBuildStatusMessage(shim, notifier.getIncludeTestSummary(),
+            boolean currentBuildHasResult = build.hasResult();
+            if(alwaysTrue && (currentBuildHasResult && result.isWorseThan(previousResult) || moreTestFailuresThanPreviousBuild(build, previous)) && notifier.getNotifyRegression()) {
+                String message = getBuildStatusMessage(build, notifier.getIncludeTestSummary(),
                         notifier.getIncludeFailedTests(), notifier.getIncludeCustomMessage());
                 if (notifier.getCommitInfoChoice().showAnything()) {
-                    message = message + "\n" + getCommitList(shim);
+                    message = message + "\n" + getCommitList(build);
                 }
-                notification = new Notification(message, getBuildColor(shim));
+                notification = new Notification(message, getBuildColor(build));
             }
         }
         return notification;
     }
 
     @Override
-    public Notification completedBuild(AbstractBuild<?, ?> r) {
-        Build build = BuildShim.create(r);
+    public Notification completedBuild(Build build) {
         Result result = build.result();
         Notification notification = null;
         if (build.projectHasAtLeastOneCompletedBuild()) {

@@ -441,11 +441,12 @@ public class SlackNotifier extends Notifier {
         logger.info("Performing complete notifications");
         SlackService slack = newSlackService(build, listener);
         ActiveNotifier notifier = new ActiveNotifier(this);
-        Notification n = notifier.completedBuild(build);
+        BuildShim shim = BuildShim.create(build);
+        Notification n = notifier.completedBuild(shim);
         slack.publish(n);
         if (notifyRegression) {
             logger.info("Performing finalize notifications");
-            Notification notification = notifier.finalizeBuild(build);
+            Notification notification = notifier.finalizeBuild(shim);
             slack.publish(notification);
         }
         return true;
@@ -455,7 +456,7 @@ public class SlackNotifier extends Notifier {
     public boolean prebuild(AbstractBuild<?, ?> build, BuildListener listener) {
         if (startNotification) {
             logger.info("Performing start notifications");
-            Notification notification = new ActiveNotifier(this).startBuild(build);
+            Notification notification = new ActiveNotifier(this).startBuild(BuildShim.create(build));
             newSlackService(build, listener).publish(notification);
         }
         return super.prebuild(build, listener);
