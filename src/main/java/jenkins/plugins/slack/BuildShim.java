@@ -6,12 +6,14 @@ import hudson.tasks.test.AbstractTestResultAction;
 import hudson.tasks.test.TestResult;
 import hudson.triggers.SCMTrigger;
 import hudson.util.LogTaskListener;
+import jenkins.model.Jenkins;
 import org.jenkinsci.plugins.displayurlapi.DisplayURLProvider;
 import org.jenkinsci.plugins.tokenmacro.MacroEvaluationException;
 import org.jenkinsci.plugins.tokenmacro.TokenMacro;
 
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.logging.Logger;
@@ -189,10 +191,47 @@ public class BuildShim implements Build {
     }
 
     @Override
+    public List<Commit> changeSetEntries() {
+        return changeSetEntryStream()
+                .map(e -> new Commit(e.getAuthor().getDisplayName(), e.getMsg()))
+                .collect(Collectors.toList());
+    }
+
+    @Override
     public long totalAffectedFilesInChangeSet() {
         return changeSetEntryStream()
                 .mapToLong(e -> e.getAffectedFiles().size())
                 .sum();
+    }
+
+    @Override
+    public Build previous() {
+        return BuildShim.create(build.getPreviousBuild());
+    }
+
+    @Override
+    public boolean doesNotHaveUpstreamCause() {
+        return build.getCause(Cause.UpstreamCause.class) == null;
+    }
+
+    @Override
+    public Build upstream() {
+        Cause.UpstreamCause c = build.getCause(Cause.UpstreamCause.class);
+        if (c == null) {
+            return null;
+        }
+        String upProjectName = c.getUpstreamProject();
+        int buildNumber = c.getUpstreamBuild();
+        AbstractProject project = Jenkins.get().getItemByFullName(upProjectName, AbstractProject.class);
+        if (project == null) {
+            return null;
+        }
+        return BuildShim.create(project.getBuildByNumber(buildNumber));
+    }
+
+    @Override
+    public boolean upstreamExists() {
+        return false;
     }
 
     private Stream<ChangeLogSet.Entry> changeSetEntryStream() {

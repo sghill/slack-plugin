@@ -2,27 +2,18 @@ package jenkins.plugins.slack;
 
 import hudson.Util;
 import hudson.model.AbstractBuild;
-import hudson.model.AbstractProject;
-import hudson.model.Cause;
 import hudson.model.Result;
-import hudson.scm.ChangeLogSet;
-import hudson.scm.ChangeLogSet.AffectedFile;
-import hudson.scm.ChangeLogSet.Entry;
-import hudson.tasks.junit.TestResultAction;
-import hudson.tasks.test.TestResult;
-import jenkins.model.Jenkins;
-import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.lang.StringUtils;
 
 import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Set;
 import java.util.logging.Logger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 @SuppressWarnings("rawtypes")
 public class ActiveNotifier implements NotificationProducer<AbstractBuild<?, ?>, Notification> {
@@ -73,20 +64,18 @@ public class ActiveNotifier implements NotificationProducer<AbstractBuild<?, ?>,
     @Override
     public Notification finalizeBuild(AbstractBuild<?, ?> r) {
         Build shim = BuildShim.create(r);
-        AbstractProject<?, ?> project = r.getProject();
-        Result result = r.getResult();
-        AbstractBuild<?, ?> previousBuild = project.getLastBuild();
+        Result result = shim.result();
+        Build previous = shim.previous();
         Notification notification = null;
-        if (null != previousBuild) {
-            do {
-                previousBuild = previousBuild.getPreviousCompletedBuild();
-            } while (previousBuild != null && previousBuild.getResult() == Result.ABORTED);
-            Result previousResult = (previousBuild != null) ? previousBuild.getResult() : Result.SUCCESS;
-            if(null != previousResult && (result != null && result.isWorseThan(previousResult) || moreTestFailuresThanPreviousBuild(r, previousBuild)) && notifier.getNotifyRegression()) {
+        if (shim.projectHasAtLeastOneCompletedBuild()) {
+            Result previousResult = shim.previousNonAbortedResult();
+            boolean alwaysTrue = null != previousResult;
+            boolean currentBuildHasResult = shim.hasResult();
+            if(alwaysTrue && (currentBuildHasResult && result.isWorseThan(previousResult) || moreTestFailuresThanPreviousBuild(shim, previous)) && notifier.getNotifyRegression()) {
                 String message = getBuildStatusMessage(shim, notifier.getIncludeTestSummary(),
                         notifier.getIncludeFailedTests(), notifier.getIncludeCustomMessage());
                 if (notifier.getCommitInfoChoice().showAnything()) {
-                    message = message + "\n" + getCommitList(r);
+                    message = message + "\n" + getCommitList(shim);
                 }
                 notification = new Notification(message, getBuildColor(shim));
             }
@@ -97,15 +86,10 @@ public class ActiveNotifier implements NotificationProducer<AbstractBuild<?, ?>,
     @Override
     public Notification completedBuild(AbstractBuild<?, ?> r) {
         Build build = BuildShim.create(r);
-        AbstractProject<?, ?> project = r.getProject();
-        Result result = r.getResult();
-        AbstractBuild<?, ?> previousBuild = project.getLastBuild();
+        Result result = build.result();
         Notification notification = null;
-        if (null != previousBuild) {
-            do {
-                previousBuild = previousBuild.getPreviousCompletedBuild();
-            } while (null != previousBuild && previousBuild.getResult() == Result.ABORTED);
-            Result previousResult = (null != previousBuild) ? previousBuild.getResult() : Result.SUCCESS;
+        if (build.projectHasAtLeastOneCompletedBuild()) {
+            Result previousResult = build.previousNonAbortedResult();
             if ((result == Result.ABORTED && notifier.getNotifyAborted())
                     || (result == Result.FAILURE //notify only on single failed build
                     && previousResult != Result.FAILURE
@@ -122,7 +106,7 @@ public class ActiveNotifier implements NotificationProducer<AbstractBuild<?, ?>,
                 String message = getBuildStatusMessage(build, notifier.getIncludeTestSummary(),
                         notifier.getIncludeFailedTests(), notifier.getIncludeCustomMessage());
                 if (notifier.getCommitInfoChoice().showAnything()) {
-                    message = message + "\n" + getCommitList(r);
+                    message = message + "\n" + getCommitList(build);
                 }
                 notification = new Notification(message, getBuildColor(build));
             }
@@ -130,10 +114,11 @@ public class ActiveNotifier implements NotificationProducer<AbstractBuild<?, ?>,
         return notification;
     }
 
-    private boolean moreTestFailuresThanPreviousBuild(AbstractBuild currentBuild, AbstractBuild<?, ?> previousBuild) {
-        if (getTestResult(currentBuild) != null && getTestResult(previousBuild) != null) {
-            if (getTestResult(currentBuild).getFailCount() > getTestResult(previousBuild).getFailCount())
+    private boolean moreTestFailuresThanPreviousBuild(Build currentBuild, Build previousBuild) {
+        if (currentBuild.hasTestResults() && previousBuild.hasTestResults()) {
+            if (currentBuild.testResults().getFailed() > previousBuild.testResults().getFailed()) {
                 return true;
+            }
 
             // test if different tests failed.
             return !getFailedTestIds(currentBuild).equals(getFailedTestIds(previousBuild));
@@ -141,18 +126,10 @@ public class ActiveNotifier implements NotificationProducer<AbstractBuild<?, ?>,
         return false;
     }
 
-    private TestResultAction getTestResult(AbstractBuild build) {
-        return build.getAction(TestResultAction.class);
-    }
-
-    private Set<String> getFailedTestIds(AbstractBuild currentBuild) {
-        Set<String> failedTestIds = new HashSet<>();
-        List<? extends TestResult> failedTests = getTestResult(currentBuild).getFailedTests();
-        for(TestResult result : failedTests) {
-            failedTestIds.add(result.getId());
-        }
-
-        return failedTestIds;
+    private Set<String> getFailedTestIds(Build build) {
+        return build.testResults().getFailedTests().stream()
+                .map(TestResults.Result::getId)
+                .collect(Collectors.toSet());
     }
 
     String getChanges(Build build, boolean includeCustomMessage) {
@@ -178,41 +155,29 @@ public class ActiveNotifier implements NotificationProducer<AbstractBuild<?, ?>,
         return message.toString();
     }
 
-    String getCommitList(AbstractBuild r) {
-        ChangeLogSet changeSet = r.getChangeSet();
-        List<Entry> entries = new LinkedList<>();
-        for (Object o : changeSet.getItems()) {
-            Entry entry = (Entry) o;
-            logger.info("Entry " + o);
-            entries.add(entry);
-        }
-        if (entries.isEmpty()) {
+    String getCommitList(Build build) {
+        if (build.doesNotHaveChangeSetEntries()) {
             logger.info("Empty change...");
-            Cause.UpstreamCause c = (Cause.UpstreamCause)r.getCause(Cause.UpstreamCause.class);
-            if (c == null) {
+            if (build.doesNotHaveUpstreamCause()) {
                 return "No Changes.";
             }
-            String upProjectName = c.getUpstreamProject();
-            int buildNumber = c.getUpstreamBuild();
-            AbstractProject project = Jenkins.get().getItemByFullName(upProjectName, AbstractProject.class);
-            if (project != null) {
-                AbstractBuild upBuild = project.getBuildByNumber(buildNumber);
-                return getCommitList(upBuild);
+            if (build.upstreamExists()) {
+                return getCommitList(build.upstream());
             }
         }
         Set<String> commits = new HashSet<>();
-        for (Entry entry : entries) {
+        for (Commit entry : build.changeSetEntries()) {
             StringBuilder commit = new StringBuilder();
             CommitInfoChoice commitInfoChoice = notifier.getCommitInfoChoice();
             if (commitInfoChoice.showTitle()) {
-                commit.append(entry.getMsg());
+                commit.append(entry.getMessage());
             }
             if (commitInfoChoice.showAuthor()) {
-                commit.append(" [").append(entry.getAuthor().getDisplayName()).append("]");
+                commit.append(" [").append(entry.getAuthor()).append("]");
             }
             commits.add(commit.toString());
         }
-        MessageBuilder message = new MessageBuilder(notifier, BuildShim.create(r));
+        MessageBuilder message = new MessageBuilder(notifier, build);
         message.append("Changes:\n- ");
         message.append(StringUtils.join(commits, "\n- "));
         return message.toString();

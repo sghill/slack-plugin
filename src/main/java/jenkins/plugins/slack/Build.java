@@ -2,6 +2,7 @@ package jenkins.plugins.slack;
 
 import hudson.model.Result;
 
+import java.util.List;
 import java.util.Set;
 
 public interface Build {
@@ -28,5 +29,10 @@ public interface Build {
     boolean doesNotHaveChangeSetComputed();
     Set<String> changeSetAuthors();
     boolean doesNotHaveChangeSetEntries();
+    List<Commit> changeSetEntries();
     long totalAffectedFilesInChangeSet();
+    Build previous();
+    boolean doesNotHaveUpstreamCause();
+    Build upstream();
+    boolean upstreamExists();
 }

@@ -38,16 +38,22 @@ public class TestResults {
     }
 
     public static class Result {
+        private final String id;
         private final String displayName;
         private final String humanDuration;
 
-        public static Result valueOf(TestResult testResult) {
-            return new Result(testResult.getFullDisplayName(), testResult.getDurationString());
+        public static Result valueOf(TestResult r) {
+            return new Result(r.getId(), r.getFullDisplayName(), r.getDurationString());
         }
 
-        public Result(String displayName, String humanDuration) {
+        public Result(String id, String displayName, String humanDuration) {
+            this.id = id;
             this.displayName = displayName;
             this.humanDuration = humanDuration;
+        }
+
+        public String getId() {
+            return id;
         }
 
         public String getDisplayName() {
